@@ -4,17 +4,14 @@ from telegram.ext import (
     Updater, CommandHandler, MessageHandler, 
     Filters, CallbackContext
 )
+from telegram.error import BadRequest
 import random
 import string
 
 # Конфигурация
 TOKEN = "7726649717:AAEqxQTXyZp-HlasxK5tgX-CIEP2BbjCHZI"
-ADMIN_CHAT_ID = 2376489529
+ADMIN_CHAT_ID = 2376489529  # Убедитесь, что этот ID корректен и бот добавлен в чат
 ADMINS = [5572610919, 5005387093, 5704130500, 5977205680, 1384155668]
-
-# Хранилище вопросов и ответов
-questions_db = {}
-answered_questions = set()
 
 # Настройка логов
 logging.basicConfig(
@@ -43,56 +40,27 @@ def question(update: Update, context: CallbackContext):
         update.message.reply_text("❌ Используйте: /question [текст вопроса]")
         return
     
-    # Генерируем ID вопроса
-    qid = generate_question_id()
-    questions_db[qid] = {
-        'user_id': user.id,
-        'username': user.username,
-        'question': question_text,
-        'answered': False
-    }
-    
-    # Отправка вопроса в админ-чат
-    context.bot.send_message(
-        chat_id=ADMIN_CHAT_ID,
-        text=f"📨 Вопрос #{qid} от @{user.username} (ID: {user.id}):\n\n{question_text}\n\n"
-             f"Для ответа используйте команду:\n"
-             f"/answer {qid} [текст ответа]"
-    )
-    update.message.reply_text(f"✅ Ваш вопрос (ID: {qid}) отправлен руководству!")
-
-def answer(update: Update, context: CallbackContext):
-    if update.message.from_user.id not in ADMINS:
-        update.message.reply_text("❌ У вас нет прав для выполнения этой команды")
-        return
-        
-    args = context.args
-    if len(args) < 2:
-        update.message.reply_text("❌ Используйте: /answer [ID вопроса] [текст ответа]")
-        return
-    
-    qid = args[0]
-    answer_text = " ".join(args[1:])
-    
-    if qid not in questions_db:
-        update.message.reply_text("❌ Вопрос с таким ID не найден")
-        return
-        
-    if questions_db[qid]['answered']:
-        update.message.reply_text("⚠️ На этот вопрос уже был дан ответ")
-        return
-    
-    # Отправляем ответ пользователю
     try:
+        # Отправка вопроса в админ-чат
         context.bot.send_message(
-            chat_id=questions_db[qid]['user_id'],
-            text=f"📢 Ответ на ваш вопрос #{qid}:\n\n{answer_text}"
+            chat_id=ADMIN_CHAT_ID,
+            text=f"📨 Вопрос от @{user.username} (ID: {user.id}):\n\n{question_text}"
         )
-        questions_db[qid]['answered'] = True
-        update.message.reply_text(f"✅ Ответ на вопрос #{qid} отправлен пользователю")
-    except Exception as e:
-        logger.error(f"Error sending answer: {e}")
-        update.message.reply_text("❌ Ошибка при отправке ответа")
+        update.message.reply_text("✅ Ваш вопрос отправлен руководству!")
+    except BadRequest as e:
+        logger.error(f"Ошибка отправки сообщения: {e}")
+        update.message.reply_text("❌ Ошибка при отправке вопроса. Администраторы уведомлены.")
+        
+        # Уведомление разработчиков об ошибке
+        for admin_id in ADMINS:
+            try:
+                context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"⚠️ Ошибка бота: не могу отправить сообщение в чат {ADMIN_CHAT_ID}\n"
+                         f"Ошибка: {str(e)}"
+                )
+            except Exception as admin_error:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {admin_error}")
 
 def main():
     updater = Updater(TOKEN, use_context=True)
@@ -101,9 +69,15 @@ def main():
     # Команды
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("question", question))
-    dp.add_handler(CommandHandler("answer", answer))
+    
+    # Обработчик ошибок
+    def error_handler(update: Update, context: CallbackContext):
+        logger.error(f'Update {update} caused error {context.error}')
+        
+    dp.add_error_handler(error_handler)
     
     updater.start_polling()
+    logger.info("Бот запущен и работает...")
     updater.idle()
 
 if __name__ == '__main__':
